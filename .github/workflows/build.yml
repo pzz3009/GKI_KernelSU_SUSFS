@@ -395,8 +395,6 @@ jobs:
             echo "v6.6.144 不可用，使用当前版本"
           fi
 
-                    fi
-
 
           # 合并 AOSP android15-6.6-lts 安全补丁
           echo "--- 合并 AOSP android15-6.6-lts (安全补丁) ---"
