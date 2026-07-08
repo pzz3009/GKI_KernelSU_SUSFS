@@ -1553,9 +1553,7 @@ jobs:
           fi
           
           echo "=== LTS 兼容性修复完成 ==="
-          
-          # Fix kselftest: memfd_test.c semun redefinition after AOSP merge
-          MEMFD_TEST="tools/testing/selftests/memfd/memfd_test.c"
+                    MEMFD_TEST="tools/testing/selftests/memfd/memfd_test.c"
           if [ -f "$MEMFD_TEST" ] && grep -q "union semun" "$MEMFD_TEST" 2>/dev/null; then
             echo "Fix memfd_test.c semun redefinition..."
             awk 'BEGIN{found=0} /^union semun/{if(found) next; found=1} 1' "$MEMFD_TEST" > /tmp/memfd_fixed.c && cp /tmp/memfd_fixed.c "$MEMFD_TEST"
