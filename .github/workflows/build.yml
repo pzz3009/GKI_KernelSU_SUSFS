@@ -385,12 +385,12 @@ jobs:
           
           if [ "$V144_FETCHED" = true ] && git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
             echo "合并 v6.6.144..."
-            git merge v6.6.144 --no-edit 2>&1 || {
+            git merge v6.6.144 --no-edit --allow-unrelated-histories 2>&1 || {
               git merge --abort 2>/dev/null || true
-              git merge v6.6.144 --no-edit -X theirs 2>&1 || true
+              git merge v6.6.144 --no-edit --allow-unrelated-histories -X theirs 2>&1 || true
             }
             SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}')
-            echo "合并后 SUBLEVEL="
+            echo "合并后 SUBLEVEL=$SUBLEVEL"
           else
             echo "v6.6.144 不可用，使用当前版本"
           fi
