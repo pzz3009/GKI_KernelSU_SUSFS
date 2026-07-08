@@ -1411,24 +1411,28 @@ jobs:
               echo "kvm_hyptrace.h 无需修复，跳过"
             fi
           fi
-                                                                                echo "=== [4/4] 修复 SUSFS dmabuf compatibility ==="
+                                                                                                    echo "=== [4/4] 修复 SUSFS dmabuf compatibility ==="
+          # 最安全方案: 不修改任何头文件
+          # 只有 get_dmabuf_info/put_dmabuf_info 有 extern 声明但无实现
+          # is_dmabuf_accounting_enabled 根本未声明
+          # 方案: 创建 .c 文件实现这些函数
+          # struct task_dma_buf_info 已在 dma-buf.h 中定义（但无 count/size）
+          # 所以 base.c 中访问 info->count 会失败
+          # 两个可能的解决:
+          #   a) 在 base.c 中把 count/size 改为 kernel.org 版本中已有的成员
+          #   b) 给 struct 添加 count/size 成员（使用 sed 只修改特定行）
+          # 选 b: 精确替换 struct task_dma_buf_info 定义
           DMABUF_H="include/linux/dma-buf.h"
-          if [ -f "$DMABUF_H" ]; then
-            if grep -q "struct task_dma_buf_info" "$DMABUF_H" && ! grep -q "int count" "$DMABUF_H"; then
-              echo "替换 task_dma_buf_info 为 AOSP GKI 版本..."
-              cp "$DMABUF_H" "$DMABUF_H.bak"
-              # 方法: 用 AWK 替换 struct 定义
-              awk '
-                /struct task_dma_buf_info/ { in_struct=1; print "struct task_dma_buf_info {"; print "       int count;"; print "       unsigned long size;"; next }
-                in_struct && /};/ { in_struct=0; next }
-                in_struct { next }
-                1
-              ' "$DMABUF_H.bak" > "$DMABUF_H"
-              echo "struct 已替换"
-            fi
-            # 创建实现文件
-            DMABUF_IMPL="drivers/dma-buf/susfs_stub.c"
-            if [ ! -f "$DMABUF_IMPL" ] || ! grep -q "is_dmabuf_accounting" "$DMABUF_IMPL"; then
+          if [ -f "$DMABUF_H" ] && grep -q "struct task_dma_buf_info" "$DMABUF_H"; then
+            if grep -q "is_dmabuf_accounting_enabled" fs/proc/base.c; then
+              echo "应用 dmabuf 修复..."
+              # 用精确的行匹配替换 struct 定义
+              sed -i '/^struct task_dma_buf_info {$/,/^};$/cstruct task_dma_buf_info {
+	int count;
+	unsigned long size;
+};' "$DMABUF_H"
+              # 创建实现 .c 文件
+              mkdir -p drivers/dma-buf
               {
                 echo '#include <linux/dma-buf.h>'
                 echo '#include <linux/slab.h>'
@@ -1436,15 +1440,17 @@ jobs:
                 echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i)'
                 echo '{ if (i) { i->count = 0; i->size = 0; } return 0; }'
                 echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'
-              } > "$DMABUF_IMPL"
+              } > drivers/dma-buf/susfs_stub.c
               if ! grep -q "susfs_stub" drivers/dma-buf/Makefile; then
                 echo "obj-y += susfs_stub.o" >> drivers/dma-buf/Makefile
               fi
-              echo "dmabuf stub 实现已创建"
+              echo "dmabuf 修复完成"
+            else
+              echo "base.c 未使用 dmabuf，跳过"
             fi
-            echo "dmabuf 修复完成"
-          fi
-          echo "=== 所有修复完成 ==="
+          else
+            echo "dma-buf.h 不存在或无 task_dma_buf_info，跳过"
+          fiecho "=== 所有修复完成 ==="
 
 
       - name: 编译内核
