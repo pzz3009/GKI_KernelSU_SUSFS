@@ -1347,6 +1347,107 @@ jobs:
             fi
           fi
 
+      - name: 修复 AOSP LTS 兼容性 (CYDP + KABI + trace)
+        if: always()
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -ex
+
+          echo "=== [1/3] 修复 cydp.h (typedef -> define) ==="
+          CYDP_H="include/linux/cydp.h"
+          if [ -f "$CYDP_H" ]; then
+            if grep -q "typedef unsigned long cydp_t" "$CYDP_H"; then
+              sed -i "s/typedef unsigned long cydp_t;/#define cydp_t unsigned long/" "$CYDP_H"
+              echo "cydp.h 已修复: typedef -> define"
+            else
+              echo "cydp.h 已处理，跳过"
+            fi
+          else
+            echo "cydp.h 不存在，创建..."
+            mkdir -p include/linux
+            cat > "$CYDP_H" << 'EOF'
+#ifndef _LINUX_CYDP_H
+#define _LINUX_CYDP_H
+#define cydp_t unsigned long
+#define CYDP_CLEAR_YOUNG 0x1UL
+#define CYDP_GET_YOUNG   0x2UL
+#endif /* _LINUX_CYDP_H */
+EOF
+            echo "cydp.h 已创建"
+          fi
+          echo "=== [2/3] 修复 sched_param 重定义 ==="
+          SCHED_H="include/uapi/linux/sched/types.h"
+          if [ -f "$SCHED_H" ]; then
+            if [ "$(grep -c 'struct sched_param' "$SCHED_H")" -gt 1 ]; then
+              python3 << 'PYEOF'
+import sys
+with open('include/uapi/linux/sched/types.h', 'r') as f:
+    lines = f.readlines()
+first = True
+new_lines = []
+skip_until = -1
+for i, line in enumerate(lines):
+    if 'struct sched_param' in line and i+1 < len(lines) and '{' in lines[i+1]:
+        if first:
+            first = False
+            new_lines.append(line)
+        else:
+            skip_until = i
+            find_close = i
+            while find_close < len(lines):
+                if '}' in lines[find_close]:
+                    skip_until = find_close
+                    break
+                find_close += 1
+            continue
+    elif skip_until >= 0 and i <= skip_until + 1:
+        continue
+    else:
+        new_lines.append(line)
+with open('include/uapi/linux/sched/types.h', 'w') as f:
+    f.writelines(new_lines)
+PYEOF
+              echo "sched_types.h 重复定义已清理"
+            else
+              echo "sched_types.h 无重复定义，跳过"
+            fi
+          fi
+          echo "=== [3/3] 修复 kvm_hyptrace.h trace_page_desc 不完整 ==="
+          HYP_TRACE_H="arch/arm64/include/asm/kvm_hyptrace.h"
+          if [ -f "$HYP_TRACE_H" ]; then
+            if grep -q "struct trace_page_desc" "$HYP_TRACE_H"; then
+              if ! grep -q "struct trace_page_desc {" "$HYP_TRACE_H"; then
+                python3 << 'PYEOF'
+content = open('arch/arm64/include/asm/kvm_hyptrace.h').read()
+insert = '''struct trace_page_desc {
+       unsigned long index;
+       unsigned long order;
+       unsigned int gfp_flags;
+       int preferred_nid;
+       nodemask_t *nodemask;
+};
+'''
+if '#ifndef __ASSEMBLY__' in content:
+    marker = '#define __ASM_KVM_HYPTRACE_H'
+    if marker in content:
+        pos = content.index(marker) + len(marker)
+        content = content[:pos] + '\n\n' + insert + content[pos:]
+elif 'struct trace_page_desc' in content:
+    import re
+    content = re.sub(r'struct trace_page_desc;', insert.strip(), content)
+open('arch/arm64/include/asm/kvm_hyptrace.h', 'w').write(content)
+PYEOF
+                echo "kvm_hyptrace.h trace_page_desc 已修复为完整定义"
+              else
+                echo "kvm_hyptrace.h 已有完整定义，跳过"
+              fi
+            else
+              echo "kvm_hyptrace.h 无需修复，跳过"
+            fi
+          fi
+          echo "=== 所有修复完成 ==="
+
+
       - name: 编译内核
         uses: nick-fields/retry@v4
         with:
@@ -1541,3 +1642,4 @@ jobs:
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9
+
