@@ -1365,48 +1365,25 @@ jobs:
           else
             echo "cydp.h 不存在，创建..."
             mkdir -p include/linux
-            cat > "$CYDP_H" << 'EOF'
-#ifndef _LINUX_CYDP_H
-#define _LINUX_CYDP_H
-#define cydp_t unsigned long
-#define CYDP_CLEAR_YOUNG 0x1UL
-#define CYDP_GET_YOUNG   0x2UL
-#endif /* _LINUX_CYDP_H */
-EOF
+            {
+              echo '#ifndef _LINUX_CYDP_H'
+              echo '#define _LINUX_CYDP_H'
+              echo '#define cydp_t unsigned long'
+              echo '#define CYDP_CLEAR_YOUNG 0x1UL'
+              echo '#define CYDP_GET_YOUNG   0x2UL'
+              echo '#endif'
+            } > "$CYDP_H"
             echo "cydp.h 已创建"
           fi
           echo "=== [2/3] 修复 sched_param 重定义 ==="
           SCHED_H="include/uapi/linux/sched/types.h"
           if [ -f "$SCHED_H" ]; then
             if [ "$(grep -c 'struct sched_param' "$SCHED_H")" -gt 1 ]; then
-              python3 << 'PYEOF'
-import sys
-with open('include/uapi/linux/sched/types.h', 'r') as f:
-    lines = f.readlines()
-first = True
-new_lines = []
-skip_until = -1
-for i, line in enumerate(lines):
-    if 'struct sched_param' in line and i+1 < len(lines) and '{' in lines[i+1]:
-        if first:
-            first = False
-            new_lines.append(line)
-        else:
-            skip_until = i
-            find_close = i
-            while find_close < len(lines):
-                if '}' in lines[find_close]:
-                    skip_until = find_close
-                    break
-                find_close += 1
-            continue
-    elif skip_until >= 0 and i <= skip_until + 1:
-        continue
-    else:
-        new_lines.append(line)
-with open('include/uapi/linux/sched/types.h', 'w') as f:
-    f.writelines(new_lines)
-PYEOF
+              # Simple approach: delete 2nd occurrence of struct sched_param block
+              awk '/struct sched_param/ && /{/ {count++; if(count==2) {skip=1}} skip && /}/ {skip=0; next} !skip' "$SCHED_H" > /tmp/sched_types_fixed.h
+              if [ -f "$SCHED_H" ]; then
+                mv /tmp/sched_types_fixed.h "$SCHED_H"
+              fi
               echo "sched_types.h 重复定义已清理"
             else
               echo "sched_types.h 无重复定义，跳过"
@@ -1417,26 +1394,15 @@ PYEOF
           if [ -f "$HYP_TRACE_H" ]; then
             if grep -q "struct trace_page_desc" "$HYP_TRACE_H"; then
               if ! grep -q "struct trace_page_desc {" "$HYP_TRACE_H"; then
-                python3 << 'PYEOF'
-content = open('arch/arm64/include/asm/kvm_hyptrace.h').read()
-insert = '''struct trace_page_desc {
-       unsigned long index;
-       unsigned long order;
-       unsigned int gfp_flags;
-       int preferred_nid;
-       nodemask_t *nodemask;
-};
-'''
-if '#ifndef __ASSEMBLY__' in content:
-    marker = '#define __ASM_KVM_HYPTRACE_H'
-    if marker in content:
-        pos = content.index(marker) + len(marker)
-        content = content[:pos] + '\n\n' + insert + content[pos:]
-elif 'struct trace_page_desc' in content:
-    import re
-    content = re.sub(r'struct trace_page_desc;', insert.strip(), content)
-open('arch/arm64/include/asm/kvm_hyptrace.h', 'w').write(content)
-PYEOF
+                # Use sed to add struct definition after the include guard
+                sed -i '/#define __ASM_KVM_HYPTRACE_H/a\nstruct trace_page_desc {\n\tunsigned long index;\n\tunsigned long order;\n\tunsigned int gfp_flags;\n\tint preferred_nid;\n\tnodemask_t *nodemask;\n};' "$HYP_TRACE_H"
+                # Remove the forward declaration if it exists
+                sed -i '/^struct trace_page_desc;$/d' "$HYP_TRACE_H"
+                # In case __ASM_KVM_HYPTRACE_H guard is not there, add before first use
+                if grep -q 'struct trace_page_desc;' "$HYP_TRACE_H"; then
+                  sed -i 's/struct trace_page_desc;//' "$HYP_TRACE_H"
+                  # The struct was defined above already by the first sed
+                fi
                 echo "kvm_hyptrace.h trace_page_desc 已修复为完整定义"
               else
                 echo "kvm_hyptrace.h 已有完整定义，跳过"
@@ -1642,4 +1608,5 @@ PYEOF
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9
+
 
