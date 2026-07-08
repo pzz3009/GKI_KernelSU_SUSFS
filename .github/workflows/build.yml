@@ -1411,62 +1411,39 @@ jobs:
               echo "kvm_hyptrace.h 无需修复，跳过"
             fi
           fi
-                    echo "=== [4/4] 修复 dmabuf 函数 (SUSFS on kernel.org LTS) ==="
-          # 在 fs/proc/base.c 中，SUSFS 补丁添加了 dmabuf 相关函数调用
-          # 但 kernel.org LTS 源码中没有这些函数。创建 stub 头文件。
-          DMASTUB="include/linux/susfs_dmabuf_stub.h"
-          {
-            echo '#ifndef _SUSFS_DMABUF_STUB_H'
-            echo '#define _SUSFS_DMABUF_STUB_H'
-            echo ''
-            echo '/* Stub for AOSP GKI dmabuf accounting functions not in kernel.org LTS */'
-            echo ''
-            echo 'struct task_dma_buf_info {'
-            echo '       int count;'
-            echo '       unsigned long size;'
-            echo '};'
-            echo ''
-            echo 'static inline bool is_dmabuf_accounting_enabled(void)'
-            echo '{'
-            echo '       return false;'
-            echo '}'
-            echo ''
-            echo 'static inline int get_dmabuf_info(struct task_struct *task,'
-            echo '                                  struct task_dma_buf_info *info)'
-            echo '{'
-            echo '       if (info) {'
-            echo '               info->count = 0;'
-            echo '               info->size = 0;'
-            echo '       }'
-            echo '       return 0;'
-            echo '}'
-            echo ''
-            echo 'static inline void put_dmabuf_info(struct task_struct *task,'
-            echo '                                   struct task_dma_buf_info *info)'
-            echo '{'
-            echo '       /* stub: no-op */'
-            echo '}'
-            echo ''
-            echo '#endif /* _SUSFS_DMABUF_STUB_H */'
-          } > "$DMASTUB"
-
-          # 在 fs/proc/base.c 中包含这个 stub
-          if grep -q 'get_dmabuf_info|is_dmabuf_accounting_enabled' fs/proc/base.c; then
-            if ! grep -qF 'susfs_dmabuf_stub.h' fs/proc/base.c; then
-              sed -i '/^#include.*susfs_def.h/a #include <linux/susfs_dmabuf_stub.h>' fs/proc/base.c
-              echo "dmabuf stub 已注入 base.c"
+                                                                                echo "=== [4/4] 修复 SUSFS dmabuf compatibility ==="
+          DMABUF_H="include/linux/dma-buf.h"
+          if [ -f "$DMABUF_H" ]; then
+            if grep -q "struct task_dma_buf_info" "$DMABUF_H" && ! grep -q "int count" "$DMABUF_H"; then
+              echo "替换 task_dma_buf_info 为 AOSP GKI 版本..."
+              cp "$DMABUF_H" "$DMABUF_H.bak"
+              # 方法: 用 AWK 替换 struct 定义
+              awk '
+                /struct task_dma_buf_info/ { in_struct=1; print "struct task_dma_buf_info {"; print "       int count;"; print "       unsigned long size;"; next }
+                in_struct && /};/ { in_struct=0; next }
+                in_struct { next }
+                1
+              ' "$DMABUF_H.bak" > "$DMABUF_H"
+              echo "struct 已替换"
             fi
-          fi
-
-          # 还需要在 include/linux/dma-buf.h 中也 include 这个 stub（如果有的话）
-          if [ -f "include/linux/dma-buf.h" ]; then
-            if ! grep -qF 'susfs_dmabuf_stub.h' include/linux/dma-buf.h; then
-              echo '#include <linux/susfs_dmabuf_stub.h>' >> include/linux/dma-buf.h
-              echo "dmabuf stub 已注入 dma-buf.h"
+            # 创建实现文件
+            DMABUF_IMPL="drivers/dma-buf/susfs_stub.c"
+            if [ ! -f "$DMABUF_IMPL" ] || ! grep -q "is_dmabuf_accounting" "$DMABUF_IMPL"; then
+              {
+                echo '#include <linux/dma-buf.h>'
+                echo '#include <linux/slab.h>'
+                echo 'bool is_dmabuf_accounting_enabled(void) { return false; }'
+                echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i)'
+                echo '{ if (i) { i->count = 0; i->size = 0; } return 0; }'
+                echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'
+              } > "$DMABUF_IMPL"
+              if ! grep -q "susfs_stub" drivers/dma-buf/Makefile; then
+                echo "obj-y += susfs_stub.o" >> drivers/dma-buf/Makefile
+              fi
+              echo "dmabuf stub 实现已创建"
             fi
-          fi
-
-          echo "=== 所有修复完成 ==="
+            echo "dmabuf 修复完成"
+          fiecho "=== 所有修复完成 ==="
 
 
       - name: 编译内核
@@ -1663,5 +1640,6 @@ jobs:
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9
+
 
 
