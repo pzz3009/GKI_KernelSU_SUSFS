@@ -429,7 +429,7 @@ jobs:
             FP="$KERNEL_ROOT/common/$sf"
             if [ -f "$FP" ]; then
               if grep -q "union semun" "$FP" 2>/dev/null; then
-                sed -i "/^union semun/{/if(found)/!{x;s/^/x/;/x/{x;d};x;h}}" "$FP" 2>/dev/null || true
+                sed -i "/^union semun\$/d" "$FP" 2>/dev/null; echo "  Cleaned semun: $sf"
                 echo "  Cleaned semun: $sf"
               fi
             fi
