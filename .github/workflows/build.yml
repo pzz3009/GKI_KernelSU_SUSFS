@@ -308,47 +308,54 @@ jobs:
           set -ex
           echo "=== lts 模式: 合入 CodeLinaro qcom 内核 ==="
           
-          # 1. 下载 CodeLinaro qcom
-          echo "下载 CodeLinaro qcom 源码..."
+          # 1. 用浅层 clone 获取 CodeLinaro qcom（减少数据量，避免 TLS 断开）
+          echo "下载 CodeLinaro qcom 源码（浅层克隆）..."
           rm -rf /tmp/qcom-src
-          git clone --branch KERNEL.PLATFORM.4.0.r1-17300-kernel.0 https://git.codelinaro.org/clo/la/kernel/qcom.git /tmp/qcom-src 2>&1
-          
+          git init /tmp/qcom-src
           cd /tmp/qcom-src
+          git remote add origin https://git.codelinaro.org/clo/la/kernel/qcom.git
+          git config http.postBuffer 524288000
+          # 设置 5 分钟超时
+          git config http.lowSpeedLimit 1000
+          git config http.lowSpeedTime 300
+          
+          # 先 fetch tag（深度1）
+          git fetch --depth=1 origin refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0:refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0 2>&1 || {
+            echo "浅层 fetch tag 失败，尝试完整 fetch..."
+            git fetch origin refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0:refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0 2>&1
+          }
+          git checkout tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0
           COMMIT_HASH=$(git rev-parse --short HEAD)
           echo "CodeLinaro tag commit: $COMMIT_HASH"
           
-          # 2. 合并 stable/linux-6.6.y（获取最新 6.6.x）
-          echo "合并 CodeLinaro stable/linux-6.6.y..."
-          git config user.email "builder@local"
-          git config user.name "Builder"
-          git fetch --depth=500 origin stable/linux-6.6.y 2>&1 || git fetch origin stable/linux-6.6.y 2>&1
-          git merge FETCH_HEAD --no-edit 2>&1 || {
-            echo "合并冲突，使用 -X theirs 自动解决..."
-            git merge --abort 2>/dev/null || true
-            git merge FETCH_HEAD --no-edit -X theirs 2>&1 || true
-          }
+          # 2. 尝试 fetch stable/linux-6.6.y
+          echo "Fetch stable/linux-6.6.y..."
+          git fetch --depth=1 origin stable/linux-6.6.y 2>&1 || echo "浅层 fetch 失败，跳过"
+          if git rev-parse -q --verify origin/stable/linux-6.6.y > /dev/null 2>&1; then
+            git merge origin/stable/linux-6.6.y --no-edit 2>&1 || {
+              echo "合并冲突，使用 -X theirs..."
+              git merge --abort 2>/dev/null || true
+              git merge origin/stable/linux-6.6.y --no-edit -X theirs 2>&1 || true
+            }
+          fi
           
           SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
-          echo "合并 stable/linux-6.6.y 后 SUBLEVEL=$SUBLEVEL"
+          echo "当前 SUBLEVEL=$SUBLEVEL"
           
-          # 3. 尝试拉取 6.6.144 从 kernel.org
-          echo "尝试拉取 6.6.144..."
+          # 3. 尝试从 kernel.org 拉取 6.6.144
+          echo "尝试拉取 v6.6.144..."
           git remote add kernel.org https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
-          git fetch --depth=1 kernel.org v6.6.144 2>&1 || echo "kernel.org 不可用，尝试 tag..."
-          git fetch --depth=500 kernel.org v6.6.144 2>&1 || echo "无法从 kernel.org 拉取 6.6.144"
+          git fetch --depth=1 kernel.org v6.6.144 2>&1 || echo "无法从 kernel.org fetch v6.6.144"
           
-          # 如果 kernel.org 的 tag 可用，基于它 merge
           if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
-            echo "找到 v6.6.144 tag，尝试合并..."
+            echo "找到 v6.6.144 tag，合并..."
             git merge v6.6.144 --no-edit 2>&1 || {
-              echo "合并 v6.6.144 冲突，使用 -X theirs..."
+              echo "合并冲突..."
               git merge --abort 2>/dev/null || true
               git merge v6.6.144 --no-edit -X theirs 2>&1 || true
             }
             SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
             echo "合并 v6.6.144 后 SUBLEVEL=$SUBLEVEL"
-          else
-            echo "v6.6.144 不可用，使用当前版本"
           fi
           
           # 4. 备份 AOSP 构建系统文件
@@ -373,7 +380,6 @@ jobs:
           if [ -d "/tmp/aosp-build" ]; then
             ls /tmp/aosp-build/ | while read f; do
               cp "/tmp/aosp-build/$f" "$f"
-              echo "  已恢复: $f"
             done
           fi
           
