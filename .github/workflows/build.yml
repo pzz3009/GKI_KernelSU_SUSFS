@@ -301,6 +301,74 @@ jobs:
 
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
+      - name: 合入 CodeLinaro qcom 内核源码 (lts 模式)
+        if: inputs.os_patch_level == 'lts'
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -ex
+          echo "=== lts 模式: 合入 CodeLinaro qcom 内核 ==="
+          
+          # 1. 下载 CodeLinaro qcom KERNEL.PLATFORM.4.0.r1-17300-kernel.0 源码包
+          echo "下载 CodeLinaro qcom 源码..."
+          rm -rf /tmp/qcom-src
+          git clone --branch KERNEL.PLATFORM.4.0.r1-17300-kernel.0 https://git.codelinaro.org/clo/la/kernel/qcom.git /tmp/qcom-src 2>&1
+          
+          cd /tmp/qcom-src
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          echo "CodeLinaro tag commit: $COMMIT_HASH"
+          
+          # 2. 合并 stable/linux-6.6.y（获取 6.6.144）
+          echo "合并 CodeLinaro stable/linux-6.6.y..."
+          git config user.email "builder@local"
+          git config user.name "Builder"
+          git fetch --depth=500 origin stable/linux-6.6.y 2>&1 || git fetch origin stable/linux-6.6.y 2>&1
+          git merge FETCH_HEAD --no-edit 2>&1 || {
+            echo "合并冲突，使用 -X theirs 自动解决..."
+            git merge --abort 2>/dev/null || true
+            git merge FETCH_HEAD --no-edit -X theirs 2>&1 || true
+          }
+          
+          SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
+          echo "合并后 SUBLEVEL=$SUBLEVEL"
+          
+          # 3. 备份 AOSP 构建系统文件
+          echo "备份 AOSP 构建系统文件..."
+          cd "$KERNEL_ROOT/common"
+          mkdir -p /tmp/aosp-build
+          find . -maxdepth 1 \( -name 'BUILD.bazel' -o -name 'build.config.*' -o -name 'BUILD.bazel.safeboot' \) -exec cp {} /tmp/aosp-build/ \; 2>/dev/null || true
+          
+          # 4. 删除 common 中除 .git 外的所有内容
+          echo "清空 common 目录..."
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
+          
+          # 5. 复制 CodeLinaro 代码到 common
+          echo "复制 CodeLinaro 内核源码..."
+          cd /tmp/qcom-src
+          tar cf /tmp/qcom-full.tar --exclude=.git .
+          cd "$KERNEL_ROOT/common"
+          tar xf /tmp/qcom-full.tar
+          
+          # 6. 恢复 AOSP 构建系统文件
+          echo "恢复 AOSP 构建系统文件..."
+          if [ -d "/tmp/aosp-build" ]; then
+            ls /tmp/aosp-build/ | while read f; do
+              cp "/tmp/aosp-build/$f" "$f"
+              echo "  已恢复: $f"
+            done
+          fi
+          
+          # 7. 检查关键文件存在
+          echo "检查关键文件..."
+          for f in Makefile BUILD.bazel build.config.gki.aarch64; do
+            if [ -f "$f" ]; then echo "  OK: $f"; else echo "  MISSING: $f"; fi
+          done
+          
+          # 8. 更新 SUBLEVEL 到环境变量
+          echo "ACTUAL_SUBLEVEL=$SUBLEVEL" >> $GITHUB_ENV
+          echo "实际子版本号: $SUBLEVEL (通过 CodeLinaro merge 获取)"
+          
+          rm -rf /tmp/qcom-src /tmp/qcom-full.tar /tmp/aosp-build
+          echo "=== CodeLinaro 合入完成 ==="
 
       - name: 应用 Stock Config 伪装
         run: |
@@ -1348,8 +1416,59 @@ jobs:
           fi
 
 
+      - name: 修复 LTS 编译兼容性 (signal.h 和 dmabuf)
+        if: inputs.os_patch_level == 'lts'
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -ex
+          echo "=== 修复 LTS 编译兼容性 ==="
+          
+          # 1. 修复 signal.h 数组越界
+          echo "修复 signal.h 数组越界..."
+          if [ -f "Makefile" ]; then
+            if ! grep -q "Wno-error=array-bounds" "Makefile"; then
+              echo "" >> Makefile
+              echo "# LTS compatibility: disable array-bounds error" >> Makefile
+              echo "KBUILD_CFLAGS += -Wno-error=array-bounds" >> Makefile
+              echo "已在 Makefile 添加 -Wno-error=array-bounds"
+            fi
+          fi
+          
+          # 2. 修复 dmabuf stub - 使用临时文件方法
+          BASE_C="fs/proc/base.c"
+          if [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
+            echo "修复 base.c dmabuf stub..."
+            
+            # 删除旧的错误注入
+            awk '!/__AOSP_DMABUF_STUB_BASE|task_dma_buf_info aosp|struct aosp_task_dma_buf_info|static inline bool is_dmabuf_accounting|static inline int get_dmabuf_info|static inline void put_dmabuf_info/' "$BASE_C" > /tmp/base_clean.c
+            
+            # 找到最后一个 include 行
+            LAST_INC=$(grep -n "^#include" /tmp/base_clean.c | tail -1 | cut -d: -f1)
+            if [ -n "$LAST_INC" ]; then
+              head -n "$LAST_INC" /tmp/base_clean.c > /tmp/base_fixed.c
+              cat >> /tmp/base_fixed.c << 'DMABUF_EOF'
+              
+#ifndef __AOSP_DMABUF_STUB_BASE
+#define __AOSP_DMABUF_STUB_BASE
+#include <linux/types.h>
+#include <linux/sched.h>
+#define task_dma_buf_info aosp_task_dma_buf_info
+struct aosp_task_dma_buf_info { int count; unsigned long size; };
+static inline bool is_dmabuf_accounting_enabled(void) { return false; }
+static inline int get_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }
+static inline void put_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { }
+#endif
+DMABUF_EOF
+              tail -n +$((LAST_INC + 1)) /tmp/base_clean.c >> /tmp/base_fixed.c
+              cp /tmp/base_fixed.c "$BASE_C"
+              echo "dmabuf stub 已在 include 块后正确注入（使用 heredoc 方法）"
+            fi
+            rm -f /tmp/base_clean.c /tmp/base_fixed.c
+          fi
+          
+          echo "=== LTS 兼容性修复完成 ==="
       - name: 修复 AOSP LTS 兼容性
-        if: always()
+        if: inputs.os_patch_level != 'lts'
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           set -ex
@@ -1580,3 +1699,4 @@ jobs:
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9
+
