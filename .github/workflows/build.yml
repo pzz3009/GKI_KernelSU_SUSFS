@@ -308,83 +308,106 @@ jobs:
           set -ex
           echo "=== lts 模式: 合入 CodeLinaro qcom 内核 ==="
           
-          # 1. 用浅层 clone 获取 CodeLinaro qcom（减少数据量，避免 TLS 断开）
-          echo "下载 CodeLinaro qcom 源码（浅层克隆）..."
-          rm -rf /tmp/qcom-src
-          git init /tmp/qcom-src
-          cd /tmp/qcom-src
-          git remote add origin https://git.codelinaro.org/clo/la/kernel/qcom.git
-          git config http.postBuffer 524288000
-          # 设置 5 分钟超时
-          git config http.lowSpeedLimit 1000
-          git config http.lowSpeedTime 300
+          CODELINARO_TAG="KERNEL.PLATFORM.4.0.r1-17300-kernel.0"
+          rm -rf /tmp/qcom-src /tmp/qcom.tar.gz
+          mkdir -p /tmp/qcom-src
           
-          # 先 fetch tag（深度1）
-          git fetch --depth=1 origin refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0:refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0 2>&1 || {
-            echo "浅层 fetch tag 失败，尝试完整 fetch..."
-            git fetch origin refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0:refs/tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0 2>&1
-          }
-          git checkout tags/KERNEL.PLATFORM.4.0.r1-17300-kernel.0
-          COMMIT_HASH=$(git rev-parse --short HEAD)
-          echo "CodeLinaro tag commit: $COMMIT_HASH"
+          # 从 CodeLinaro 下载 archive（比 git clone 更稳定）
+          # 方式A: archive download (single file, less likely to timeout)
+          echo "方式A: 尝试从 CodeLinaro 下载 archive..."
+          ARCHIVE_URL="https://git.codelinaro.org/clo/la/kernel/qcom/-/archive/${CODELINARO_TAG}/qcom-${CODELINARO_TAG}.tar.gz"
+          for i in 1 2 3; do
+            echo "  尝试 $i/3..."
+            if curl -fSL --connect-timeout 60 --max-time 600 -o /tmp/qcom.tar.gz "$ARCHIVE_URL" 2>/dev/null; then
+              echo "  下载成功!"
+              break
+            fi
+            sleep 10
+          done
           
-          # 2. 尝试 fetch stable/linux-6.6.y
-          echo "Fetch stable/linux-6.6.y..."
-          git fetch --depth=1 origin stable/linux-6.6.y 2>&1 || echo "浅层 fetch 失败，跳过"
-          if git rev-parse -q --verify origin/stable/linux-6.6.y > /dev/null 2>&1; then
-            git merge origin/stable/linux-6.6.y --no-edit 2>&1 || {
-              echo "合并冲突，使用 -X theirs..."
-              git merge --abort 2>/dev/null || true
-              git merge origin/stable/linux-6.6.y --no-edit -X theirs 2>&1 || true
+          if [ -f /tmp/qcom.tar.gz ] && [ -s /tmp/qcom.tar.gz ]; then
+            echo "解压源码..."
+            tar xzf /tmp/qcom.tar.gz -C /tmp/qcom-src --strip-components=1 2>/dev/null || {
+              echo "解压失败，清理..."
+              rm -rf /tmp/qcom-src/* /tmp/qcom.tar.gz
             }
           fi
+          
+          # 方式B: 如果 archive 失败，用 git+retry
+          if [ ! -f "/tmp/qcom-src/Makefile" ]; then
+            echo "方式B: archive 失败，尝试 git clone..."
+            rm -rf /tmp/qcom-src
+            for i in 1 2 3 4 5; do
+              echo "  git 尝试 $i/5..."
+              GIT_TERMINAL_PROMPT=0 timeout 300 git clone --depth=1 --branch "$CODELINARO_TAG" https://git.codelinaro.org/clo/la/kernel/qcom.git /tmp/qcom-src 2>&1 && {
+                echo "  git clone 成功!"
+                break
+              }
+              sleep 15
+            done
+          fi
+          
+          cd /tmp/qcom-src
+          if [ ! -f "Makefile" ]; then
+            echo "所有方式都失败，退出"
+            exit 1
+          fi
+          echo "CodeLinaro 源码获取成功!"
           
           SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
           echo "当前 SUBLEVEL=$SUBLEVEL"
           
-          # 3. 尝试从 kernel.org 拉取 6.6.144
-          echo "尝试拉取 v6.6.144..."
+          # 合入 v6.6.144
+          echo "尝试合入 v6.6.144..."
+          git config user.email "builder@local"
+          git config user.name "Builder"
           git remote add kernel.org https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
-          git fetch --depth=1 kernel.org v6.6.144 2>&1 || echo "无法从 kernel.org fetch v6.6.144"
+          
+          for i in 1 2 3; do
+            echo "  fetch v6.6.144 尝试 $i/3..."
+            git fetch --depth=1 kernel.org v6.6.144 2>&1 && {
+              echo "  fetch 成功!"
+              break
+            }
+            sleep 10
+          done
           
           if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
-            echo "找到 v6.6.144 tag，合并..."
+            echo "合并 v6.6.144..."
             git merge v6.6.144 --no-edit 2>&1 || {
-              echo "合并冲突..."
+              echo "冲突，使用 -X theirs..."
               git merge --abort 2>/dev/null || true
               git merge v6.6.144 --no-edit -X theirs 2>&1 || true
             }
-            SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
-            echo "合并 v6.6.144 后 SUBLEVEL=$SUBLEVEL"
+            SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}')
+            echo "合并后 SUBLEVEL=$SUBLEVEL"
           fi
           
-          # 4. 备份 AOSP 构建系统文件
+          # 备份 AOSP 构建系统文件
           echo "备份 AOSP 构建系统文件..."
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
           find . -maxdepth 1 \( -name 'BUILD.bazel' -o -name 'build.config.*' -o -name 'BUILD.bazel.safeboot' \) -exec cp {} /tmp/aosp-build/ \; 2>/dev/null || true
           
-          # 5. 清空 common
+          # 清空 common
           echo "清空 common 目录..."
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
           
-          # 6. 复制 CodeLinaro 代码
-          echo "复制 CodeLinaro 内核源码..."
+          # 复制 CodeLinaro 代码到 common
+          echo "复制 CodeLinaro 内核源码到 common..."
           cd /tmp/qcom-src
-          tar cf /tmp/qcom-full.tar --exclude=.git .
-          cd "$KERNEL_ROOT/common"
-          tar xf /tmp/qcom-full.tar
+          tar cf - --exclude=.git . | tar xf - -C "$KERNEL_ROOT/common/"
           
-          # 7. 恢复 AOSP 构建系统文件
+          # 恢复 AOSP 构建系统文件
           echo "恢复 AOSP 构建系统文件..."
+          cd "$KERNEL_ROOT/common"
           if [ -d "/tmp/aosp-build" ]; then
-            ls /tmp/aosp-build/ | while read f; do
-              cp "/tmp/aosp-build/$f" "$f"
+            for f in $(ls /tmp/aosp-build/); do
+              [ -f "/tmp/aosp-build/$f" ] && cp "/tmp/aosp-build/$f" "$f"
             done
           fi
           
-          # 8. 检查关键文件
-          echo "检查关键文件..."
+          # 检查关键文件
           for f in Makefile BUILD.bazel build.config.gki.aarch64; do
             if [ -f "$f" ]; then echo "  OK: $f"; else echo "  MISSING: $f"; fi
           done
@@ -392,7 +415,7 @@ jobs:
           echo "ACTUAL_SUBLEVEL=$SUBLEVEL" >> $GITHUB_ENV
           echo "实际子版本号: $SUBLEVEL"
           
-          rm -rf /tmp/qcom-src /tmp/qcom-full.tar /tmp/aosp-build
+          rm -rf /tmp/qcom-src /tmp/qcom.tar.gz /tmp/aosp-build
           echo "=== CodeLinaro 合入完成 ==="
 
       - name: 应用 Stock Config 伪装
