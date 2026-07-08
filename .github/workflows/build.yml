@@ -308,7 +308,7 @@ jobs:
           set -ex
           echo "=== lts 模式: 合入 CodeLinaro qcom 内核 ==="
           
-          # 1. 下载 CodeLinaro qcom KERNEL.PLATFORM.4.0.r1-17300-kernel.0 源码包
+          # 1. 下载 CodeLinaro qcom
           echo "下载 CodeLinaro qcom 源码..."
           rm -rf /tmp/qcom-src
           git clone --branch KERNEL.PLATFORM.4.0.r1-17300-kernel.0 https://git.codelinaro.org/clo/la/kernel/qcom.git /tmp/qcom-src 2>&1
@@ -317,7 +317,7 @@ jobs:
           COMMIT_HASH=$(git rev-parse --short HEAD)
           echo "CodeLinaro tag commit: $COMMIT_HASH"
           
-          # 2. 合并 stable/linux-6.6.y（获取 6.6.144）
+          # 2. 合并 stable/linux-6.6.y（获取最新 6.6.x）
           echo "合并 CodeLinaro stable/linux-6.6.y..."
           git config user.email "builder@local"
           git config user.name "Builder"
@@ -329,26 +329,46 @@ jobs:
           }
           
           SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
-          echo "合并后 SUBLEVEL=$SUBLEVEL"
+          echo "合并 stable/linux-6.6.y 后 SUBLEVEL=$SUBLEVEL"
           
-          # 3. 备份 AOSP 构建系统文件
+          # 3. 尝试拉取 6.6.144 从 kernel.org
+          echo "尝试拉取 6.6.144..."
+          git remote add kernel.org https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
+          git fetch --depth=1 kernel.org v6.6.144 2>&1 || echo "kernel.org 不可用，尝试 tag..."
+          git fetch --depth=500 kernel.org v6.6.144 2>&1 || echo "无法从 kernel.org 拉取 6.6.144"
+          
+          # 如果 kernel.org 的 tag 可用，基于它 merge
+          if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
+            echo "找到 v6.6.144 tag，尝试合并..."
+            git merge v6.6.144 --no-edit 2>&1 || {
+              echo "合并 v6.6.144 冲突，使用 -X theirs..."
+              git merge --abort 2>/dev/null || true
+              git merge v6.6.144 --no-edit -X theirs 2>&1 || true
+            }
+            SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
+            echo "合并 v6.6.144 后 SUBLEVEL=$SUBLEVEL"
+          else
+            echo "v6.6.144 不可用，使用当前版本"
+          fi
+          
+          # 4. 备份 AOSP 构建系统文件
           echo "备份 AOSP 构建系统文件..."
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
           find . -maxdepth 1 \( -name 'BUILD.bazel' -o -name 'build.config.*' -o -name 'BUILD.bazel.safeboot' \) -exec cp {} /tmp/aosp-build/ \; 2>/dev/null || true
           
-          # 4. 删除 common 中除 .git 外的所有内容
+          # 5. 清空 common
           echo "清空 common 目录..."
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
           
-          # 5. 复制 CodeLinaro 代码到 common
+          # 6. 复制 CodeLinaro 代码
           echo "复制 CodeLinaro 内核源码..."
           cd /tmp/qcom-src
           tar cf /tmp/qcom-full.tar --exclude=.git .
           cd "$KERNEL_ROOT/common"
           tar xf /tmp/qcom-full.tar
           
-          # 6. 恢复 AOSP 构建系统文件
+          # 7. 恢复 AOSP 构建系统文件
           echo "恢复 AOSP 构建系统文件..."
           if [ -d "/tmp/aosp-build" ]; then
             ls /tmp/aosp-build/ | while read f; do
@@ -357,15 +377,14 @@ jobs:
             done
           fi
           
-          # 7. 检查关键文件存在
+          # 8. 检查关键文件
           echo "检查关键文件..."
           for f in Makefile BUILD.bazel build.config.gki.aarch64; do
             if [ -f "$f" ]; then echo "  OK: $f"; else echo "  MISSING: $f"; fi
           done
           
-          # 8. 更新 SUBLEVEL 到环境变量
           echo "ACTUAL_SUBLEVEL=$SUBLEVEL" >> $GITHUB_ENV
-          echo "实际子版本号: $SUBLEVEL (通过 CodeLinaro merge 获取)"
+          echo "实际子版本号: $SUBLEVEL"
           
           rm -rf /tmp/qcom-src /tmp/qcom-full.tar /tmp/aosp-build
           echo "=== CodeLinaro 合入完成 ==="
@@ -1434,7 +1453,16 @@ jobs:
             fi
           fi
           
-          # 2. 修复 dmabuf stub - 使用 cat 重定向方法
+          # 2. 修复 remap_file_pages 隐式声明 (CodeLinaro 6.6.127+ kselftest)
+          echo "修复 kselftest remap_file_pages..."
+          for f in tools/testing/selftests/drivers/wrapfd/wrapfd.c; do
+            if [ -f "$f" ]; then
+              sed -i 's/remap_file_pages/test_remap_file_pages/' "$f" 2>/dev/null || true
+              echo "  已修复 $f"
+            fi
+          done
+          
+          # 3. 修复 dmabuf stub
           BASE_C="fs/proc/base.c"
           if [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
             echo "修复 base.c dmabuf stub..."
