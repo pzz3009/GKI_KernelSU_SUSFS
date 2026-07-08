@@ -355,7 +355,7 @@ jobs:
           echo "从 kernel.org 获取 v6.6.144..."
           git remote add korg https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
           for i in 1 2 3; do
-            if git fetch --depth=1 korg v6.6.144 2>&1; then V144_FETCHED=true; break; fi
+            if git fetch --depth=1 korg refs/tags/v6.6.144:refs/tags/v6.6.144 2>&1; then V144_FETCHED=true; break; fi
             sleep 10
           done
           
@@ -364,7 +364,7 @@ jobs:
             echo "kernel.org 失败，尝试 GitHub 镜像..."
             git remote add gh-stable https://github.com/gregkh/linux.git 2>/dev/null || true
             for i in 1 2 3; do
-              if git fetch --depth=1 gh-stable v6.6.144 2>&1; then V144_FETCHED=true; break; fi
+              if git fetch --depth=1 gh-stable refs/tags/v6.6.144:refs/tags/v6.6.144 2>&1; then V144_FETCHED=true; break; fi
               sleep 10
             done
           fi
@@ -395,6 +395,33 @@ jobs:
             echo "v6.6.144 不可用，使用当前版本"
           fi
           
+          
+          # 合并 AOSP android15-6.6-lts 安全补丁
+          echo "--- 合并 AOSP android15-6.6-lts (安全补丁) ---"
+          git remote add aosp-lts https://android.googlesource.com/kernel/common 2>/dev/null || true
+          AOSP_FETCHED=false
+          for i in 1 2 3; do
+            if git fetch --depth=100 aosp-lts android15-6.6-lts 2>&1; then
+              AOSP_FETCHED=true
+              break
+            fi
+            sleep 10
+          done
+          if [ "$AOSP_FETCHED" = true ]; then
+            echo "合并 AOSP LTS 安全补丁..."
+            git merge aosp-lts/android15-6.6-lts --no-edit 2>&1 || {
+              git merge --abort 2>/dev/null || true
+              echo "AOSP LTS merge 有冲突，尝试 -X theirs..."
+              git merge aosp-lts/android15-6.6-lts --no-edit -X theirs 2>&1 || {
+                git merge --abort 2>/dev/null || true
+                echo "AOSP LTS merge 失败，跳过"
+              }
+            }
+            SUBLEVEL=$(grep "^SUBLEVEL = " Makefile 2>/dev/null | awk "{print $3}")
+            echo "合并 AOSP 后 SUBLEVEL=$SUBLEVEL"
+          else
+            echo "AOSP android15-6.6-lts 不可用，跳过安全补丁合并"
+          fi
           # 备份 AOSP 构建系统
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
