@@ -399,12 +399,12 @@ jobs:
           if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
             V144_SUB=$(git show v6.6.144:Makefile 2>/dev/null | grep "^SUBLEVEL = " | head -1 | awk "{print $3}")
             CURRENT_SUB=$(grep "^SUBLEVEL = " Makefile | head -1 | awk "{print $3}")
-            if [ -n "" ] && [ "" != "" ]; then
-              echo "更新 SUBLEVEL:  ->  (来自 v6.6.144)"
-              sed -i "s/^SUBLEVEL = .*/SUBLEVEL = /" Makefile
+            if [ -n "$V144_SUB" ] && [ "$V144_SUB" != "$CURRENT_SUB" ]; then
+              echo "Update SUBLEVEL: $CURRENT_SUB -> $V144_SUB (from v6.6.144)"
+              sed -i "s/^SUBLEVEL = .*/SUBLEVEL = $V144_SUB/" Makefile
             fi
             SUBLEVEL=$(grep "^SUBLEVEL = " Makefile | head -1 | awk "{print $3}")
-            echo "最终 SUBLEVEL="
+            echo "Final SUBLEVEL=$SUBLEVEL"
           fi
 
 
