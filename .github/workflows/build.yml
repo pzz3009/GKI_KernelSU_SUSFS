@@ -312,100 +312,81 @@ jobs:
           rm -rf /tmp/qcom-src /tmp/qcom.tar.gz
           
           # 从 CodeLinaro 下载 archive
-          echo "方式A: 尝试从 CodeLinaro 下载 archive..."
+          echo "下载 CodeLinaro qcom archive..."
           ARCHIVE_URL="https://git.codelinaro.org/clo/la/kernel/qcom/-/archive/${CODELINARO_TAG}/qcom-${CODELINARO_TAG}.tar.gz"
           for i in 1 2 3; do
             echo "  尝试 $i/3..."
             if curl -fSL --connect-timeout 60 --max-time 600 -o /tmp/qcom.tar.gz "$ARCHIVE_URL" 2>/dev/null; then
-              echo "  下载成功!"
               break
             fi
             sleep 10
           done
           
           if [ -f /tmp/qcom.tar.gz ] && [ -s /tmp/qcom.tar.gz ]; then
-            echo "解压源码..."
             mkdir -p /tmp/qcom-src
-            tar xzf /tmp/qcom.tar.gz -C /tmp/qcom-src --strip-components=1 2>/dev/null || {
-              echo "解压失败，清理..."
-              rm -rf /tmp/qcom-src/* /tmp/qcom.tar.gz
-            }
+            tar xzf /tmp/qcom.tar.gz -C /tmp/qcom-src --strip-components=1 2>/dev/null || rm -rf /tmp/qcom-src/* /tmp/qcom.tar.gz
           fi
           
-          # 方式B: git clone with retry
           if [ ! -f "/tmp/qcom-src/Makefile" ]; then
-            echo "方式B: archive 失败，尝试 git clone..."
+            echo "尝试 git clone..."
             rm -rf /tmp/qcom-src
             for i in 1 2 3 4 5; do
-              echo "  git 尝试 $i/5..."
-              GIT_TERMINAL_PROMPT=0 timeout 300 git clone --depth=1 --branch "$CODELINARO_TAG" https://git.codelinaro.org/clo/la/kernel/qcom.git /tmp/qcom-src 2>&1 && {
-                echo "  git clone 成功!"
-                break
-              }
+              GIT_TERMINAL_PROMPT=0 timeout 300 git clone --depth=1 --branch "$CODELINARO_TAG" https://git.codelinaro.org/clo/la/kernel/qcom.git /tmp/qcom-src 2>&1 && break
               sleep 15
             done
           fi
           
           cd /tmp/qcom-src
-          if [ ! -f "Makefile" ]; then
-            echo "所有方式都失败，退出"
-            exit 1
-          fi
+          if [ ! -f "Makefile" ]; then echo "失败!"; exit 1; fi
           echo "CodeLinaro 源码获取成功!"
           
           SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
-          echo "当前 SUBLEVEL=$SUBLEVEL"
+          echo "原始 SUBLEVEL=$SUBLEVEL"
           
-          # 合入 v6.6.144 - 先初始化 git 仓库（archive 方式下载的没有 .git）
-          echo "初始化 git 仓库用于 merge..."
-          git init
-          git add -A
-          git commit -m "base: CodeLinaro qcom $CODELINARO_TAG" --allow-empty 2>/dev/null || true
-          git config user.email "builder@local"
-          git config user.name "Builder"
+          # 初始化 git + merge v6.6.144
+          echo "初始化 git..."
+          git init && git add -A
+          git commit -m "base" --allow-empty 2>/dev/null || true
+          git config user.email "builder@local" && git config user.name "Builder"
           
-          echo "尝试合入 v6.6.144..."
-          git remote add kernel.org https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
+          echo "从 kernel.org 获取 v6.6.144..."
+          git remote add korg https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
           
+          V144_FETCHED=false
           for i in 1 2 3; do
-            echo "  fetch v6.6.144 尝试 $i/3..."
-            git fetch --depth=1 kernel.org v6.6.144 2>&1 && {
-              echo "  fetch 成功!"
-              break
-            }
-            sleep 10
+            echo "  fetch 尝试 $i/3..."
+            if git fetch --depth=1 korg v6.6.144 2>&1; then V144_FETCHED=true; break; fi
+            sleep 15
           done
           
-          if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
+          if [ "$V144_FETCHED" = false ]; then
+            echo "  kernel.org fetch 失败，尝试 refspec..."
+            for i in 1 2 3; do
+              if git fetch --depth=1 korg refs/tags/v6.6.144:refs/tags/v6.6.144 2>&1; then V144_FETCHED=true; break; fi
+              sleep 10
+            done
+          fi
+          
+          if [ "$V144_FETCHED" = true ] && git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
             echo "合并 v6.6.144..."
             git merge v6.6.144 --no-edit 2>&1 || {
-              echo "冲突，使用 -X theirs..."
               git merge --abort 2>/dev/null || true
               git merge v6.6.144 --no-edit -X theirs 2>&1 || true
             }
             SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}')
             echo "合并后 SUBLEVEL=$SUBLEVEL"
-          else
-            echo "v6.6.144 不可用，保持当前版本"
           fi
           
-          # 备份 AOSP 构建系统文件
-          echo "备份 AOSP 构建系统文件..."
+          # 备份 AOSP 构建系统
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
           find . -maxdepth 1 \( -name 'BUILD.bazel' -o -name 'build.config.*' -o -name 'BUILD.bazel.safeboot' \) -exec cp {} /tmp/aosp-build/ \; 2>/dev/null || true
           
-          # 清空 common
-          echo "清空 common 目录..."
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
           
-          # 复制 CodeLinaro 代码到 common（排除 .git）
-          echo "复制 CodeLinaro 内核源码到 common..."
           cd /tmp/qcom-src
           tar cf - --exclude=.git . | tar xf - -C "$KERNEL_ROOT/common/"
           
-          # 恢复 AOSP 构建系统文件
-          echo "恢复 AOSP 构建系统文件..."
           cd "$KERNEL_ROOT/common"
           if [ -d "/tmp/aosp-build" ]; then
             for f in $(ls /tmp/aosp-build/); do
@@ -413,9 +394,8 @@ jobs:
             done
           fi
           
-          # 检查关键文件
           for f in Makefile BUILD.bazel build.config.gki.aarch64; do
-            if [ -f "$f" ]; then echo "  OK: $f"; else echo "  MISSING: $f"; fi
+            [ -f "$f" ] && echo "  OK: $f" || echo "  MISSING: $f"
           done
           
           echo "ACTUAL_SUBLEVEL=$SUBLEVEL" >> $GITHUB_ENV
@@ -1488,14 +1468,14 @@ jobs:
             fi
           fi
           
-          # 2. 修复 remap_file_pages 隐式声明 (CodeLinaro 6.6.127+ kselftest)
+          # 2. 修复 remap_file_pages 隐式声明 - 只替换调用，不动函数定义
           echo "修复 kselftest remap_file_pages..."
-          for f in tools/testing/selftests/drivers/wrapfd/wrapfd.c; do
-            if [ -f "$f" ]; then
-              sed -i 's/remap_file_pages/test_remap_file_pages/' "$f" 2>/dev/null || true
-              echo "  已修复 $f"
-            fi
-          done
+          WRAPFD="tools/testing/selftests/drivers/wrapfd/wrapfd.c"
+          if [ -f "$WRAPFD" ]; then
+            # 只替换 ASSERT_EQ(remap_file_pages( 这种调用
+            sed -i 's/ASSERT_EQ(remap_file_pages(/ASSERT_EQ(test_remap_file_pages(/g' "$WRAPFD" 2>/dev/null || true
+            echo "  已修复 $WRAPFD"
+          fi
           
           # 3. 修复 dmabuf stub
           BASE_C="fs/proc/base.c"
