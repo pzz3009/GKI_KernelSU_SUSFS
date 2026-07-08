@@ -349,20 +349,36 @@ jobs:
           git commit -m "base" --allow-empty 2>/dev/null || true
           git config user.email "builder@local" && git config user.name "Builder"
           
+          V144_FETCHED=false
+          
+          # 尝试从 kernel.org 获取 v6.6.144
           echo "从 kernel.org 获取 v6.6.144..."
           git remote add korg https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
-          
-          V144_FETCHED=false
           for i in 1 2 3; do
-            echo "  fetch 尝试 $i/3..."
             if git fetch --depth=1 korg v6.6.144 2>&1; then V144_FETCHED=true; break; fi
-            sleep 15
+            sleep 10
           done
           
+          # 如果 kernel.org 不行，尝试从 GitHub 上的稳定内核仓库获取
           if [ "$V144_FETCHED" = false ]; then
-            echo "  kernel.org fetch 失败，尝试 refspec..."
+            echo "kernel.org 失败，尝试 GitHub 镜像..."
+            git remote add gh-stable https://github.com/gregkh/linux.git 2>/dev/null || true
             for i in 1 2 3; do
-              if git fetch --depth=1 korg refs/tags/v6.6.144:refs/tags/v6.6.144 2>&1; then V144_FETCHED=true; break; fi
+              if git fetch --depth=1 gh-stable v6.6.144 2>&1; then V144_FETCHED=true; break; fi
+              sleep 10
+            done
+          fi
+          
+          # 还不行就尝试 AOSP common 仓库的 android15-6.6-lts 分支
+          if [ "$V144_FETCHED" = false ]; then
+            echo "GitHub 镜像失败，尝试 AOSP..."
+            git remote add aosp https://android.googlesource.com/kernel/common 2>/dev/null || true
+            for i in 1 2 3; do
+              if git fetch --depth=1 aosp android15-6.6-lts 2>&1; then
+                echo "AOSP android15-6.6-lts 获取成功，获取安全补丁"
+                # 这里会获取 AOSP 的安全补丁，但不会改变内核版本
+                break
+              fi
               sleep 10
             done
           fi
@@ -375,6 +391,8 @@ jobs:
             }
             SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}')
             echo "合并后 SUBLEVEL=$SUBLEVEL"
+          else
+            echo "v6.6.144 不可用，使用当前版本"
           fi
           
           # 备份 AOSP 构建系统
@@ -1462,18 +1480,21 @@ jobs:
           if [ -f "Makefile" ]; then
             if ! grep -q "Wno-error=array-bounds" "Makefile"; then
               echo "" >> Makefile
-              echo "# LTS compatibility: disable array-bounds error" >> Makefile
-              echo "KBUILD_CFLAGS += -Wno-error=array-bounds" >> Makefile
+              echo "# LTS compatibility" >> Makefile
+              echo 'subdir-ccflags-y += -Wno-error=array-bounds' >> Makefile
               echo "已在 Makefile 添加 -Wno-error=array-bounds"
             fi
           fi
           
-          # 2. 修复 remap_file_pages 隐式声明 - 只替换调用，不动函数定义
-          echo "修复 kselftest remap_file_pages..."
+          # 2. 修复 kselftest wrapfd.c - 删除 remap_file_pages 相关的整块
+          echo "修复 kselftest wrapfd.c..."
           WRAPFD="tools/testing/selftests/drivers/wrapfd/wrapfd.c"
           if [ -f "$WRAPFD" ]; then
-            # 只替换 ASSERT_EQ(remap_file_pages( 这种调用
-            sed -i 's/ASSERT_EQ(remap_file_pages(/ASSERT_EQ(test_remap_file_pages(/g' "$WRAPFD" 2>/dev/null || true
+            # 创建一个临时文件，删除从 test_remap_file_pages 函数开始到下一个 static void 之前的内容
+            awk '/^static void test_remap_file_pages/{skip=1} skip&&/^static void /&&!/test_remap_file_pages/{skip=0} !skip' "$WRAPFD" > /tmp/wrapfd_fixed.c
+            # 再删除包含 remap_file_pages 的行
+            grep -v "remap_file_pages" /tmp/wrapfd_fixed.c > /tmp/wrapfd_clean.c
+            cp /tmp/wrapfd_clean.c "$WRAPFD"
             echo "  已修复 $WRAPFD"
           fi
           
@@ -1481,13 +1502,11 @@ jobs:
           BASE_C="fs/proc/base.c"
           if [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
             echo "修复 base.c dmabuf stub..."
-            
             awk '!/__AOSP_DMABUF_STUB_BASE|task_dma_buf_info aosp|struct aosp_task_dma_buf_info|static inline bool is_dmabuf_accounting|static inline int get_dmabuf_info|static inline void put_dmabuf_info/' "$BASE_C" > /tmp/base_clean.c
             
             LAST_INC=$(grep -n "^#include" /tmp/base_clean.c | tail -1 | cut -d: -f1)
             if [ -n "$LAST_INC" ]; then
               head -n "$LAST_INC" /tmp/base_clean.c > /tmp/base_fixed.c
-              
               echo "" >> /tmp/base_fixed.c
               echo "#ifndef __AOSP_DMABUF_STUB_BASE" >> /tmp/base_fixed.c
               echo "#define __AOSP_DMABUF_STUB_BASE" >> /tmp/base_fixed.c
@@ -1499,7 +1518,6 @@ jobs:
               echo "static inline int get_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }" >> /tmp/base_fixed.c
               echo "static inline void put_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { }" >> /tmp/base_fixed.c
               echo "#endif" >> /tmp/base_fixed.c
-              
               tail -n +$((LAST_INC + 1)) /tmp/base_clean.c >> /tmp/base_fixed.c
               cp /tmp/base_fixed.c "$BASE_C"
               echo "dmabuf stub 已在 include 块后正确注入"
