@@ -1363,10 +1363,10 @@ jobs:
             mkdir -p include/linux
             { echo '#ifndef _LINUX_CYDP_H'; echo '#define _LINUX_CYDP_H'; echo '#define cydp_t unsigned long'; echo '#define CYDP_CLEAR_YOUNG 0x1UL'; echo '#define CYDP_GET_YOUNG   0x2UL'; echo '#endif'; } > "$CYDP_H"
           fi
-          echo "=== [2/4] sched_param (keep 1st, remove 2nd) ==="
+          echo "=== [2/4] sched_param ==="
           SCHED_H="include/uapi/linux/sched/types.h"
           if [ -f "$SCHED_H" ] && [ "$(grep -c 'struct sched_param' "$SCHED_H")" -gt 1 ]; then
-            awk 'BEGIN{skip=0;count=0} /struct sched_param/ && /\{/{count++; if(count==2){skip=1}} skip{ if(/\};/){skip=0} next} 1' "$SCHED_H" > /tmp/sched_fixed.h && cp /tmp/sched_fixed.h "$SCHED_H"
+            awk 'BEGIN{s=0;c=0} /struct sched_param/ && /\{/{c++; if(c==2){s=1}} s{ if(/\};/){s=0} next} 1' "$SCHED_H" > /tmp/st && cp /tmp/st "$SCHED_H"
           fi
           echo "=== [3/4] kvm_hyptrace ==="
           HYP_TRACE="arch/arm64/include/asm/kvm_hyptrace.h"
@@ -1378,8 +1378,20 @@ jobs:
           DMABUF_H="include/linux/dma-buf.h"
           BASE_C="fs/proc/base.c"
           if [ -f "$DMABUF_H" ] && [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
-            cp "$DMABUF_H" "$DMABUF_H.bak"
-            python3 -c "import re;c=open('$DMABUF_H.bak').read();c=re.sub(r'struct task_dma_buf_info\s*\{[^}]*\};','struct task_dma_buf_info { int count; unsigned long size; };',c,count=1);open('$DMABUF_H','w').write(c)"
+            # Insert struct + func declarations directly at the top of dma-buf.h
+            sed -i '1i\
+#ifndef __AOSP_DMABUF_STUB\
+#define __AOSP_DMABUF_STUB\
+struct task_dma_buf_info { int count; unsigned long size; };\
+bool is_dmabuf_accounting_enabled(void);\
+int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);\
+void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);\
+#endif
+' "$DMABUF_H"
+            # Replace existing struct task_dma_buf_info with just a typedef to avoid redefinition
+            # (our new one at the top takes precedence)
+            sed -i '/^struct task_dma_buf_info {/,/^};$/d' "$DMABUF_H"
+            # Create implementation file
             mkdir -p drivers/dma-buf
             { echo '#include <linux/dma-buf.h>'; echo 'bool is_dmabuf_accounting_enabled(void) { return false; }'; echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }'; echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'; } > drivers/dma-buf/susfs_stub.c
             if ! grep -q "susfs_stub" drivers/dma-buf/Makefile; then echo "obj-y += susfs_stub.o" >> drivers/dma-buf/Makefile; fi
