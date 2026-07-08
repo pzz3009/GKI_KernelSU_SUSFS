@@ -1411,6 +1411,61 @@ jobs:
               echo "kvm_hyptrace.h 无需修复，跳过"
             fi
           fi
+                    echo "=== [4/4] 修复 dmabuf 函数 (SUSFS on kernel.org LTS) ==="
+          # 在 fs/proc/base.c 中，SUSFS 补丁添加了 dmabuf 相关函数调用
+          # 但 kernel.org LTS 源码中没有这些函数。创建 stub 头文件。
+          DMASTUB="include/linux/susfs_dmabuf_stub.h"
+          {
+            echo '#ifndef _SUSFS_DMABUF_STUB_H'
+            echo '#define _SUSFS_DMABUF_STUB_H'
+            echo ''
+            echo '/* Stub for AOSP GKI dmabuf accounting functions not in kernel.org LTS */'
+            echo ''
+            echo 'struct task_dma_buf_info {'
+            echo '       int count;'
+            echo '       unsigned long size;'
+            echo '};'
+            echo ''
+            echo 'static inline bool is_dmabuf_accounting_enabled(void)'
+            echo '{'
+            echo '       return false;'
+            echo '}'
+            echo ''
+            echo 'static inline int get_dmabuf_info(struct task_struct *task,'
+            echo '                                  struct task_dma_buf_info *info)'
+            echo '{'
+            echo '       if (info) {'
+            echo '               info->count = 0;'
+            echo '               info->size = 0;'
+            echo '       }'
+            echo '       return 0;'
+            echo '}'
+            echo ''
+            echo 'static inline void put_dmabuf_info(struct task_struct *task,'
+            echo '                                   struct task_dma_buf_info *info)'
+            echo '{'
+            echo '       /* stub: no-op */'
+            echo '}'
+            echo ''
+            echo '#endif /* _SUSFS_DMABUF_STUB_H */'
+          } > "$DMASTUB"
+
+          # 在 fs/proc/base.c 中包含这个 stub
+          if grep -q 'get_dmabuf_info|is_dmabuf_accounting_enabled' fs/proc/base.c; then
+            if ! grep -qF 'susfs_dmabuf_stub.h' fs/proc/base.c; then
+              sed -i '/^#include.*susfs_def.h/a #include <linux/susfs_dmabuf_stub.h>' fs/proc/base.c
+              echo "dmabuf stub 已注入 base.c"
+            fi
+          fi
+
+          # 还需要在 include/linux/dma-buf.h 中也 include 这个 stub（如果有的话）
+          if [ -f "include/linux/dma-buf.h" ]; then
+            if ! grep -qF 'susfs_dmabuf_stub.h' include/linux/dma-buf.h; then
+              echo '#include <linux/susfs_dmabuf_stub.h>' >> include/linux/dma-buf.h
+              echo "dmabuf stub 已注入 dma-buf.h"
+            fi
+          fi
+
           echo "=== 所有修复完成 ==="
 
 
