@@ -310,10 +310,8 @@ jobs:
           
           CODELINARO_TAG="KERNEL.PLATFORM.4.0.r1-17300-kernel.0"
           rm -rf /tmp/qcom-src /tmp/qcom.tar.gz
-          mkdir -p /tmp/qcom-src
           
-          # 从 CodeLinaro 下载 archive（比 git clone 更稳定）
-          # 方式A: archive download (single file, less likely to timeout)
+          # 从 CodeLinaro 下载 archive
           echo "方式A: 尝试从 CodeLinaro 下载 archive..."
           ARCHIVE_URL="https://git.codelinaro.org/clo/la/kernel/qcom/-/archive/${CODELINARO_TAG}/qcom-${CODELINARO_TAG}.tar.gz"
           for i in 1 2 3; do
@@ -327,13 +325,14 @@ jobs:
           
           if [ -f /tmp/qcom.tar.gz ] && [ -s /tmp/qcom.tar.gz ]; then
             echo "解压源码..."
+            mkdir -p /tmp/qcom-src
             tar xzf /tmp/qcom.tar.gz -C /tmp/qcom-src --strip-components=1 2>/dev/null || {
               echo "解压失败，清理..."
               rm -rf /tmp/qcom-src/* /tmp/qcom.tar.gz
             }
           fi
           
-          # 方式B: 如果 archive 失败，用 git+retry
+          # 方式B: git clone with retry
           if [ ! -f "/tmp/qcom-src/Makefile" ]; then
             echo "方式B: archive 失败，尝试 git clone..."
             rm -rf /tmp/qcom-src
@@ -357,10 +356,15 @@ jobs:
           SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}') || SUBLEVEL="unknown"
           echo "当前 SUBLEVEL=$SUBLEVEL"
           
-          # 合入 v6.6.144
-          echo "尝试合入 v6.6.144..."
+          # 合入 v6.6.144 - 先初始化 git 仓库（archive 方式下载的没有 .git）
+          echo "初始化 git 仓库用于 merge..."
+          git init
+          git add -A
+          git commit -m "base: CodeLinaro qcom $CODELINARO_TAG" --allow-empty 2>/dev/null || true
           git config user.email "builder@local"
           git config user.name "Builder"
+          
+          echo "尝试合入 v6.6.144..."
           git remote add kernel.org https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git 2>/dev/null || true
           
           for i in 1 2 3; do
@@ -381,6 +385,8 @@ jobs:
             }
             SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}')
             echo "合并后 SUBLEVEL=$SUBLEVEL"
+          else
+            echo "v6.6.144 不可用，保持当前版本"
           fi
           
           # 备份 AOSP 构建系统文件
@@ -393,7 +399,7 @@ jobs:
           echo "清空 common 目录..."
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
           
-          # 复制 CodeLinaro 代码到 common
+          # 复制 CodeLinaro 代码到 common（排除 .git）
           echo "复制 CodeLinaro 内核源码到 common..."
           cd /tmp/qcom-src
           tar cf - --exclude=.git . | tar xf - -C "$KERNEL_ROOT/common/"
