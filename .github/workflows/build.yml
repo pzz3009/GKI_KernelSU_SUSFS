@@ -1434,34 +1434,32 @@ jobs:
             fi
           fi
           
-          # 2. 修复 dmabuf stub - 使用临时文件方法
+          # 2. 修复 dmabuf stub - 使用 cat 重定向方法
           BASE_C="fs/proc/base.c"
           if [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
             echo "修复 base.c dmabuf stub..."
             
-            # 删除旧的错误注入
             awk '!/__AOSP_DMABUF_STUB_BASE|task_dma_buf_info aosp|struct aosp_task_dma_buf_info|static inline bool is_dmabuf_accounting|static inline int get_dmabuf_info|static inline void put_dmabuf_info/' "$BASE_C" > /tmp/base_clean.c
             
-            # 找到最后一个 include 行
             LAST_INC=$(grep -n "^#include" /tmp/base_clean.c | tail -1 | cut -d: -f1)
             if [ -n "$LAST_INC" ]; then
               head -n "$LAST_INC" /tmp/base_clean.c > /tmp/base_fixed.c
-              cat >> /tmp/base_fixed.c << 'DMABUF_EOF'
               
-#ifndef __AOSP_DMABUF_STUB_BASE
-#define __AOSP_DMABUF_STUB_BASE
-#include <linux/types.h>
-#include <linux/sched.h>
-#define task_dma_buf_info aosp_task_dma_buf_info
-struct aosp_task_dma_buf_info { int count; unsigned long size; };
-static inline bool is_dmabuf_accounting_enabled(void) { return false; }
-static inline int get_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }
-static inline void put_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { }
-#endif
-DMABUF_EOF
+              echo "" >> /tmp/base_fixed.c
+              echo "#ifndef __AOSP_DMABUF_STUB_BASE" >> /tmp/base_fixed.c
+              echo "#define __AOSP_DMABUF_STUB_BASE" >> /tmp/base_fixed.c
+              echo "#include <linux/types.h>" >> /tmp/base_fixed.c
+              echo "#include <linux/sched.h>" >> /tmp/base_fixed.c
+              echo "#define task_dma_buf_info aosp_task_dma_buf_info" >> /tmp/base_fixed.c
+              echo "struct aosp_task_dma_buf_info { int count; unsigned long size; };" >> /tmp/base_fixed.c
+              echo "static inline bool is_dmabuf_accounting_enabled(void) { return false; }" >> /tmp/base_fixed.c
+              echo "static inline int get_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }" >> /tmp/base_fixed.c
+              echo "static inline void put_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { }" >> /tmp/base_fixed.c
+              echo "#endif" >> /tmp/base_fixed.c
+              
               tail -n +$((LAST_INC + 1)) /tmp/base_clean.c >> /tmp/base_fixed.c
               cp /tmp/base_fixed.c "$BASE_C"
-              echo "dmabuf stub 已在 include 块后正确注入（使用 heredoc 方法）"
+              echo "dmabuf stub 已在 include 块后正确注入"
             fi
             rm -f /tmp/base_clean.c /tmp/base_fixed.c
           fi
