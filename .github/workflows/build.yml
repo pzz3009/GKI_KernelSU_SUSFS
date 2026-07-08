@@ -1353,7 +1353,7 @@ jobs:
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           set -ex
-          echo "=== [1/4] cydp.h ==="
+          echo "=== cydp.h ==="
           CYDP_H="include/linux/cydp.h"
           if [ -f "$CYDP_H" ]; then
             if grep -q "typedef unsigned long cydp_t" "$CYDP_H"; then
@@ -1363,32 +1363,26 @@ jobs:
             mkdir -p include/linux
             { echo '#ifndef _LINUX_CYDP_H'; echo '#define _LINUX_CYDP_H'; echo '#define cydp_t unsigned long'; echo '#define CYDP_CLEAR_YOUNG 0x1UL'; echo '#define CYDP_GET_YOUNG   0x2UL'; echo '#endif'; } > "$CYDP_H"
           fi
-          echo "=== [2/4] sched_param ==="
+          echo "=== sched_param ==="
           SCHED_H="include/uapi/linux/sched/types.h"
           if [ -f "$SCHED_H" ] && [ "$(grep -c 'struct sched_param' "$SCHED_H")" -gt 1 ]; then
             awk 'BEGIN{s=0;c=0} /struct sched_param/ && /\{/{c++; if(c==2){s=1}} s{ if(/\};/){s=0} next} 1' "$SCHED_H" > /tmp/st && cp /tmp/st "$SCHED_H"
           fi
-          echo "=== [3/4] kvm_hyptrace ==="
+          echo "=== kvm_hyptrace ==="
           HYP_TRACE="arch/arm64/include/asm/kvm_hyptrace.h"
           if [ -f "$HYP_TRACE" ] && grep -q 'struct trace_page_desc;' "$HYP_TRACE"; then
             sed -i '/^struct trace_page_desc;$/d' "$HYP_TRACE"
             sed -i '/#define __ASM_KVM_HYPTRACE_H/a\\nstruct trace_page_desc {\n\tunsigned long index;\n\tunsigned long order;\n\tunsigned int gfp_flags;\n\tint preferred_nid;\n\tnodemask_t *nodemask;\n};' "$HYP_TRACE"
           fi
-          echo "=== [4/4] dmabuf ==="
-          DMABUF_H="include/linux/dma-buf.h"
+          echo "=== dmabuf ==="
           BASE_C="fs/proc/base.c"
-          if [ -f "$DMABUF_H" ] && [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
-            # Prepend stub header to dma-buf.h using cat
-            { echo '#ifndef __AOSP_DMABUF_STUB'; echo '#define __AOSP_DMABUF_STUB'; echo 'struct task_dma_buf_info { int count; unsigned long size; };'; echo 'bool is_dmabuf_accounting_enabled(void);'; echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);'; echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);'; echo '#endif'; } > /tmp/dmabuf_prefix.h
-            # Remove existing struct definition from dma-buf.h
-            grep -v 'struct task_dma_buf_info' "$DMABUF_H" > /tmp/dmabuf_clean.h
-            cat /tmp/dmabuf_prefix.h /tmp/dmabuf_clean.h > "$DMABUF_H"
-            # Create implementation file
-            mkdir -p drivers/dma-buf
-            { echo '#include <linux/dma-buf.h>'; echo 'bool is_dmabuf_accounting_enabled(void) { return false; }'; echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }'; echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'; } > drivers/dma-buf/susfs_stub.c
-            if ! grep -q "susfs_stub" drivers/dma-buf/Makefile; then echo "obj-y += susfs_stub.o" >> drivers/dma-buf/Makefile; fi
+          if [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
+            # Do NOT modify dma-buf.h - insert stub at top of base.c instead
+            { echo '/* === AOSP dmabuf stub (kernel.org LTS compat) ==='; echo '#ifndef __AOSP_DMABUF_STUB_BASE'; echo '#define __AOSP_DMABUF_STUB_BASE'; echo 'struct task_dma_buf_info { int count; unsigned long size; };'; echo 'static inline bool is_dmabuf_accounting_enabled(void) { return false; }'; echo 'static inline int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }'; echo 'static inline void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'; echo '#endif'; } > /tmp/base_prefix.h
+            sed -i '1r /tmp/base_prefix.h' "$BASE_C"
+            echo "dmabuf stub injected into base.c"
           fi
-          echo "=== Fix complete ==="
+          echo "=== Done ==="
 
       - name: 编译内核
         uses: nick-fields/retry@v4
