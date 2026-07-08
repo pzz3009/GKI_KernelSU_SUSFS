@@ -419,7 +419,7 @@ jobs:
           echo "ACTUAL_SUBLEVEL=$SUBLEVEL" >> $GITHUB_ENV
           echo "实际子版本号: $SUBLEVEL"
           
-          rm -rf /tmp/qcom-src /tmp/qcom.tar.gz /tmp/aosp-build
+          rm -rf /tmp/qcom-src /tmp/qcom.tar.gz /tmp/aosp-build 2>/dev/null || true
           echo "=== CodeLinaro 合入完成 ==="
 
       - name: 应用 Stock Config 伪装
