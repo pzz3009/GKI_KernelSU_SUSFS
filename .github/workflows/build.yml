@@ -1378,19 +1378,11 @@ jobs:
           DMABUF_H="include/linux/dma-buf.h"
           BASE_C="fs/proc/base.c"
           if [ -f "$DMABUF_H" ] && [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
-            # Insert struct + func declarations directly at the top of dma-buf.h
-            sed -i '1i\
-#ifndef __AOSP_DMABUF_STUB\
-#define __AOSP_DMABUF_STUB\
-struct task_dma_buf_info { int count; unsigned long size; };\
-bool is_dmabuf_accounting_enabled(void);\
-int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);\
-void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);\
-#endif
-' "$DMABUF_H"
-            # Replace existing struct task_dma_buf_info with just a typedef to avoid redefinition
-            # (our new one at the top takes precedence)
-            sed -i '/^struct task_dma_buf_info {/,/^};$/d' "$DMABUF_H"
+            # Prepend stub header to dma-buf.h using cat
+            { echo '#ifndef __AOSP_DMABUF_STUB'; echo '#define __AOSP_DMABUF_STUB'; echo 'struct task_dma_buf_info { int count; unsigned long size; };'; echo 'bool is_dmabuf_accounting_enabled(void);'; echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);'; echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i);'; echo '#endif'; } > /tmp/dmabuf_prefix.h
+            # Remove existing struct definition from dma-buf.h
+            grep -v 'struct task_dma_buf_info' "$DMABUF_H" > /tmp/dmabuf_clean.h
+            cat /tmp/dmabuf_prefix.h /tmp/dmabuf_clean.h > "$DMABUF_H"
             # Create implementation file
             mkdir -p drivers/dma-buf
             { echo '#include <linux/dma-buf.h>'; echo 'bool is_dmabuf_accounting_enabled(void) { return false; }'; echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }'; echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'; } > drivers/dma-buf/susfs_stub.c
