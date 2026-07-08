@@ -1379,12 +1379,7 @@ jobs:
           BASE_C="fs/proc/base.c"
           if [ -f "$DMABUF_H" ] && [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
             cp "$DMABUF_H" "$DMABUF_H.bak"
-            python3 -c "
-import re
-with open('$DMABUF_H.bak') as f: c=f.read()
-c=re.sub(r'struct task_dma_buf_info\s*\{[^}]*\};','struct task_dma_buf_info { int count; unsigned long size; };',c,count=1)
-with open('$DMABUF_H','w') as f: f.write(c)
-" 2>/dev/null
+            python3 -c "import re;c=open('$DMABUF_H.bak').read();c=re.sub(r'struct task_dma_buf_info\s*\{[^}]*\};','struct task_dma_buf_info { int count; unsigned long size; };',c,count=1);open('$DMABUF_H','w').write(c)"
             mkdir -p drivers/dma-buf
             { echo '#include <linux/dma-buf.h>'; echo 'bool is_dmabuf_accounting_enabled(void) { return false; }'; echo 'int get_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }'; echo 'void put_dmabuf_info(struct task_struct *t, struct task_dma_buf_info *i) { }'; } > drivers/dma-buf/susfs_stub.c
             if ! grep -q "susfs_stub" drivers/dma-buf/Makefile; then echo "obj-y += susfs_stub.o" >> drivers/dma-buf/Makefile; fi
