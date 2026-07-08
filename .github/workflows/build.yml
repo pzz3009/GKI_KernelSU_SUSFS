@@ -395,17 +395,7 @@ jobs:
             echo "v6.6.144 不可用，使用当前版本"
           fi
 
-          # 修复: 强制更新 SUBLEVEL（CodeLinaro merge -X theirs 可能保留了旧值）
-          if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
-            V144_SUB=$(git show v6.6.144:Makefile 2>/dev/null | grep "^SUBLEVEL = " | head -1 | awk "{print $3}")
-            CURRENT_SUB=$(grep "^SUBLEVEL = " Makefile | head -1 | awk "{print $3}")
-            if [ -n "$V144_SUB" ] && [ "$V144_SUB" != "$CURRENT_SUB" ]; then
-              echo "Update SUBLEVEL: $CURRENT_SUB -> $V144_SUB (from v6.6.144)"
-              sed -i "s/^SUBLEVEL = .*/SUBLEVEL = $V144_SUB/" Makefile
-            fi
-            SUBLEVEL=$(grep "^SUBLEVEL = " Makefile | head -1 | awk "{print $3}")
-            echo "Final SUBLEVEL=$SUBLEVEL"
-          fi
+                    fi
 
 
           # 合并 AOSP android15-6.6-lts 安全补丁
