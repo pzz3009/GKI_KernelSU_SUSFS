@@ -390,7 +390,7 @@ jobs:
               git merge v6.6.144 --no-edit -X theirs 2>&1 || true
             }
             SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile 2>/dev/null | awk '{print $3}')
-            echo "合并后 SUBLEVEL=$SUBLEVEL"
+            echo "合并后 SUBLEVEL="
           else
             echo "v6.6.144 不可用，使用当前版本"
           fi
@@ -419,7 +419,7 @@ jobs:
             fi
             sleep 10
           done
-          if [ "$AOSP_FETCHED" = true ]; then
+          if [ "" = true ]; then
             echo "合并 AOSP LTS 安全补丁..."
             git merge aosp-lts/android15-6.6-lts --no-edit 2>&1 || {
               git merge --abort 2>/dev/null || true
@@ -434,7 +434,7 @@ jobs:
           else
             echo "AOSP android15-6.6-lts 不可用，跳过安全补丁合并"
           fi
- # 备份 AOSP 构建系统
+          # 备份 AOSP 构建系统
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
           find . -maxdepth 1 \( -name 'BUILD.bazel' -o -name 'build.config.*' -o -name 'BUILD.bazel.safeboot' \) -exec cp {} /tmp/aosp-build/ \; 2>/dev/null || true
