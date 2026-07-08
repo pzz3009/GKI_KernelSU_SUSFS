@@ -1554,6 +1554,14 @@ jobs:
           
           echo "=== LTS 兼容性修复完成 ==="
           
+          # Fix kselftest: memfd_test.c semun redefinition after AOSP merge
+          MEMFD_TEST="tools/testing/selftests/memfd/memfd_test.c"
+          if [ -f "$MEMFD_TEST" ] && grep -q "union semun" "$MEMFD_TEST" 2>/dev/null; then
+            echo "Fix memfd_test.c semun redefinition..."
+            awk 'BEGIN{found=0} /^union semun/{if(found) next; found=1} 1' "$MEMFD_TEST" > /tmp/memfd_fixed.c && cp /tmp/memfd_fixed.c "$MEMFD_TEST"
+            echo "  memfd_test.c fixed"
+          fi
+          
           # Fix vdso32 compilation compatibility
           VDSO32_NOTE="arch/arm64/kernel/vdso32/note.c"
           if [ -f "$VDSO32_NOTE" ] && grep -q "LINUX_VERSION_CODE" "$VDSO32_NOTE"; then
