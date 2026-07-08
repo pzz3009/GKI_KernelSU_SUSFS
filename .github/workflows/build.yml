@@ -1377,11 +1377,12 @@ jobs:
           echo "=== dmabuf ==="
           BASE_C="fs/proc/base.c"
           if [ -f "$BASE_C" ] && grep -q "is_dmabuf_accounting_enabled" "$BASE_C"; then
-            # Insert BEFORE first #include - redefine struct and add functions
-            # Use a unique name to avoid conflict with dma-buf.h's incomplete struct
             { echo '#ifndef __AOSP_DMABUF_STUB_BASE'; echo '#define __AOSP_DMABUF_STUB_BASE'; echo '#define task_dma_buf_info aosp_task_dma_buf_info'; echo 'struct aosp_task_dma_buf_info { int count; unsigned long size; };'; echo 'static inline bool is_dmabuf_accounting_enabled(void) { return false; }'; echo 'static inline int get_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { if(i){i->count=0;i->size=0;} return 0; }'; echo 'static inline void put_dmabuf_info(struct task_struct *t, struct aosp_task_dma_buf_info *i) { }'; echo '#endif'; } > /tmp/base_prefix.h
-            sed -i '0,/^#include/s//r /tmp/base_prefix.h\n&/' "$BASE_C"
-            echo "dmabuf stub injected via macro rename"
+            head -1 "$BASE_C" > /tmp/base_new.c
+            cat /tmp/base_prefix.h >> /tmp/base_new.c
+            tail -n +2 "$BASE_C" >> /tmp/base_new.c
+            cp /tmp/base_new.c "$BASE_C"
+            echo "dmabuf stub injected"
           fi
           echo "=== Done ==="
 
