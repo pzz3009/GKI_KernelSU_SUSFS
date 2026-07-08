@@ -427,10 +427,8 @@ jobs:
           echo "Removing conflicting kselftest files after merge..."
           rm -f "$KERNEL_ROOT/common/tools/testing/selftests/memfd/memfd_test.c" 2>/dev/null || true
           rm -f "$KERNEL_ROOT/common/tools/testing/selftests/drivers/wrapfd/wrapfd.c" 2>/dev/null || true
+          rm -f "$KERNEL_ROOT/common/tools/testing/selftests/ftrace/test.d/dynevent/eprobes_syntax_errors.tc" 2>/dev/null || true
           echo "  Removed conflicting kselftest files"
-          echo "  Cleaned remap: done"
-            fi
-          done
           # 备份 AOSP 构建系统
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
