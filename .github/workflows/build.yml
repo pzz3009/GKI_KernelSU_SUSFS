@@ -397,13 +397,13 @@ jobs:
 
           # 修复: 强制更新 SUBLEVEL（CodeLinaro merge -X theirs 可能保留了旧值）
           if git rev-parse -q --verify refs/tags/v6.6.144 > /dev/null 2>&1; then
-            V144_SUB=
-            CURRENT_SUB=
+            V144_SUB=$(git show v6.6.144:Makefile 2>/dev/null | grep "^SUBLEVEL = " | head -1 | awk "{print $3}")
+            CURRENT_SUB=$(grep "^SUBLEVEL = " Makefile | head -1 | awk "{print $3}")
             if [ -n "" ] && [ "" != "" ]; then
               echo "更新 SUBLEVEL:  ->  (来自 v6.6.144)"
               sed -i "s/^SUBLEVEL = .*/SUBLEVEL = /" Makefile
             fi
-            SUBLEVEL=
+            SUBLEVEL=$(grep "^SUBLEVEL = " Makefile | head -1 | awk "{print $3}")
             echo "最终 SUBLEVEL="
           fi
 
