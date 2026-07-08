@@ -1565,6 +1565,14 @@ jobs:
           fi
           
           echo "=== LTS 兼容性修复完成 ==="
+          
+          # Fix vdso32 compilation compatibility
+          VDSO32_NOTE="arch/arm64/kernel/vdso32/note.c"
+          if [ -f "$VDSO32_NOTE" ] && grep -q "LINUX_VERSION_CODE" "$VDSO32_NOTE"; then
+            echo "Fix vdso32 note.c compilation..."
+            sed -i 's/ELFNOTE32("Linux", 0, LINUX_VERSION_CODE);/ELFNOTE32("Linux", 0, 0);/' "$VDSO32_NOTE"
+            echo "  vdso32 note.c fixed"
+          fi
       - name: 修复 AOSP LTS 兼容性
         if: inputs.os_patch_level != 'lts'
         working-directory: ${{ env.KERNEL_ROOT }}/common
