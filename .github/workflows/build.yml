@@ -422,6 +422,22 @@ jobs:
           else
             echo "AOSP android15-6.6-lts 不可用，跳过安全补丁合并"
           fi
+          
+          # Clean kselftest conflicts after AOSP merge
+          echo "Cleaning kselftest conflicts after merge..."
+          for sf in "tools/testing/selftests/memfd/memfd_test.c" "tools/testing/selftests/drivers/wrapfd/wrapfd.c"; do
+            FP="$KERNEL_ROOT/common/$sf"
+            if [ -f "$FP" ]; then
+              if grep -q "union semun" "$FP" 2>/dev/null; then
+                sed -i "/^union semun/{/if(found)/!{x;s/^/x/;/x/{x;d};x;h}}" "$FP" 2>/dev/null || true
+                echo "  Cleaned semun: $sf"
+              fi
+            fi
+            if [ -f "$FP" ] && grep -q "remap_file_pages" "$FP" 2>/dev/null; then
+              grep -v "remap_file_pages" "$FP" > /tmp/clean_f2.c 2>/dev/null && cp /tmp/clean_f2.c "$FP" 2>/dev/null || true
+              echo "  Cleaned remap: $sf"
+            fi
+          done
           # 备份 AOSP 构建系统
           cd "$KERNEL_ROOT/common"
           mkdir -p /tmp/aosp-build
